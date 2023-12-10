@@ -1,0 +1,114 @@
+# .github/workflows/extract-phone.yml
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  extract-phone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/github-script@v5
+        with:
+          script: |
+            // Get the issue number and body
+            // Get the issue number and body
+            const issue_number = context.issue.number;
+            const issue_body = context.payload.issue.body;
+
+
+            // Extract the phone number from the issue body using a regular expression
+            var numbers = []
+            const pattern = /^(0|\+98)?\s*(\d\s*|\(\s*\d\s*\)\s*){10}$/;
+            issue_body.split('\n')
+              .filter(line => pattern.test(line.trim())) // filter out invalid lines
+              .map(line => line.trim().replace(/^(0|\+98)?/, '+98')) // add the prefix
+              .forEach(phone => numbers.push(phone)) // add to the numbers array
+
+
+            const file_path = "phone.txt";
+            const branch = "main";
+            const { data: file_content } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: file_path,
+              ref: branch
+            });
+
+            // Decode the content from base64
+            const content = Buffer.from(file_content.content, "base64").toString();
+
+            // If can't phone number
+            if(numbers.length == 0){
+                await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue_number,
+                    body: `can't find phone number`
+                  });
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue_number,
+                    state: "closed"
+                  });
+
+                return null
+            }
+
+            // Find duplicate phone number
+            duplicate_number = []
+            numbers.forEach(number => {
+                if (content.includes(number)) {
+                    duplicate_number.push(number)
+                }
+            })
+
+            if(duplicate_number.length > 0){
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue_number,
+                  body: `The phone number ${duplicate_number.join(', ')} is already in the file.`
+                });
+            }
+
+            // if all number is exist, close issue
+            if(duplicate_number.length == numbers.length){
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue_number,
+                  state: "closed"
+                });
+                return null
+            }
+
+            // unique phone number
+            numbers = numbers.filter(val => !duplicate_number.includes(val));
+            numbers_string = numbers.join("\n") + "\n"
+            const new_content = content + numbers_string;
+            const new_content_encoded = Buffer.from(new_content).toString("base64");
+
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: file_path,
+              message: `Add ${numbers.join(', ')} to ${file_path}`,
+              content: new_content_encoded,
+              sha: file_content.sha,
+              branch: branch
+            });
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              body: `The phone number ${numbers.join(', ')} has been added to the file. Closing the issue.`
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              state: "closed"
+            });
